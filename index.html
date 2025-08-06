@@ -42,7 +42,6 @@ export default function App() {
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [ruleToDelete, setRuleToDelete] = useState(null);
 
-  // --- ✨ HYDRATION 終極修復：使用 mounted 狀態 ---
   // 這個狀態確保只在客戶端瀏覽器上才渲染完整內容，避免伺服器與客戶端渲染不匹配。
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => {
@@ -172,7 +171,7 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  // --- ✨ HYDRATION 終極修復：在 isMounted 變為 true 之前，不渲染任何內容 ---
+  // 在 isMounted 變為 true 之前，不渲染任何內容以避免 Hydration 錯誤
   if (!isMounted) {
     return null;
   }
@@ -430,7 +429,6 @@ function RuleModal({ rule, onClose, onSave }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!formData.action || !formData.reason || !formData.targetValue) {
-      // 改用更友善的提示方式，而非瀏覽器原生的 alert
       // 在此原型中我們暫時保留 alert，但在正式產品中應替換為 UI 元件
       alert('目標值、執行動作與原因為必填欄位。');
       return;
