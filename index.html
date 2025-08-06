@@ -1,0 +1,573 @@
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { Search, RotateCcw, Plus, Edit, Trash2, X, AlertTriangle, Info, Download } from 'lucide-react';
+
+// --- 模擬資料 (Mock Data) ---
+const initialRules = [
+  { id: 1, status: 'enabled', targetType: 'member', targetValue: 'user123', action: '禁止出款', reason: '高頻異常交易', updatedAt: '2025-08-06 10:30', operator: 'admin_risk' },
+  { id: 2, status: 'enabled', targetType: 'ip', targetValue: '192.168.1.101', action: '禁止註冊', reason: '垃圾註冊行為', updatedAt: '2025-08-06 09:15', operator: 'system_auto' },
+  { id: 3, status: 'disabled', targetType: 'member', targetValue: 'danger_player', action: '禁止所有遊戲', reason: '違反遊戲規則 (暫時)', updatedAt: '2025-08-05 14:00', operator: 'admin_risk' },
+  { id: 4, status: 'enabled', targetType: 'member', targetValue: 'promo_hunter', action: '禁止領取優惠', reason: '濫用優惠條款', updatedAt: '2025-08-05 11:45', operator: 'admin_promo' },
+  { id: 5, status: 'enabled', targetType: 'ip', targetValue: '203.0.113.55', action: '禁止登入', reason: '已知的惡意來源 IP', updatedAt: '2025-08-04 18:20', operator: 'system_auto' },
+  { id: 6, status: 'enabled', targetType: 'member', targetValue: 'kyc_pending_01', action: '強制導入KYC頁面', reason: '觸發高額出款審核', updatedAt: '2025-08-04 15:00', operator: 'system_auto' },
+];
+
+const ACTIONS_LIST = ['禁止出款', '禁止存款', '禁止所有遊戲', '禁止領取優惠', '強制導入KYC頁面', '禁止登入', '禁止註冊'];
+
+// --- 預設原因對照表 ---
+const PRESET_REASONS = {
+  '禁止出款': ['高頻異常交易', '疑似洗錢行為', '帳戶司法凍結', '觸發風控審核'],
+  '禁止存款': ['存款管道異常', '疑似盜刷'],
+  '禁止所有遊戲': ['使用外掛程式', '違反遊戲公平性原則', '對壓或套利行為'],
+  '禁止領取優惠': ['濫用優惠條款', '重複申請優惠', '非本人申請'],
+  '強制導入KYC頁面': ['觸發高額出款審核', '帳戶資訊不完整', '定期安全抽查'],
+  '禁止登入': ['帳號被盜用', '嚴重違反網站條款', '應主管機關要求'],
+  '禁止註冊': ['垃圾註冊行為', '重複註冊', '惡意 IP 來源'],
+};
+
+
+// --- 主應用程式組件 (Main App Component) ---
+export default function App() {
+  const [rules, setRules] = useState(initialRules);
+  const [filters, setFilters] = useState({
+    keyword: '',
+    targetType: 'all',
+    action: 'all',
+    status: 'all',
+  });
+  const [appliedFilters, setAppliedFilters] = useState(filters);
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingRule, setEditingRule] = useState(null);
+  
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [ruleToDelete, setRuleToDelete] = useState(null);
+
+  // --- ✨ HYDRATION 終極修復：使用 mounted 狀態 ---
+  // 這個狀態確保只在客戶端瀏覽器上才渲染完整內容，避免伺服器與客戶端渲染不匹配。
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+
+  const nextId = useRef(Math.max(...initialRules.map(r => r.id)) + 1);
+
+
+  const filteredRules = useMemo(() => {
+    return rules.filter(rule => {
+      const keywordMatch = !appliedFilters.keyword || rule.targetValue.toLowerCase().includes(appliedFilters.keyword.toLowerCase());
+      const targetTypeMatch = appliedFilters.targetType === 'all' || rule.targetType === appliedFilters.targetType;
+      const actionMatch = appliedFilters.action === 'all' || rule.action === appliedFilters.action;
+      const statusMatch = appliedFilters.status === 'all' || rule.status === appliedFilters.status;
+      return keywordMatch && targetTypeMatch && actionMatch && statusMatch;
+    });
+  }, [rules, appliedFilters]);
+
+  // --- 事件處理函式 (Event Handlers) ---
+  const handleFilterChange = (e) => {
+    const { name, value } = e.target;
+    setFilters(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSearch = () => {
+    setAppliedFilters(filters);
+  };
+
+  const handleResetFilters = () => {
+    const initialFilters = {
+      keyword: '',
+      targetType: 'all',
+      action: 'all',
+      status: 'all',
+    };
+    setFilters(initialFilters);
+    setAppliedFilters(initialFilters);
+  };
+
+  const handleOpenModal = (rule = null) => {
+    setEditingRule(rule);
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setEditingRule(null);
+  };
+
+  const handleSaveRule = (ruleToSave) => {
+    const now = new Date();
+    const formattedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    const targets = ruleToSave.targetValue.split('\n').filter(t => t.trim() !== '');
+    
+    if (editingRule) {
+      // 編輯模式 (只處理第一個目標)
+      const updatedRule = { ...rules.find(r => r.id === editingRule.id), ...ruleToSave, targetValue: targets[0], updatedAt: formattedDate, operator: 'admin_you' };
+      setRules(rules.map(r => r.id === editingRule.id ? updatedRule : r));
+    } else {
+      // 新增模式 (批次)
+      const newRules = targets.map(target => {
+        const newId = nextId.current;
+        nextId.current++;
+        return {
+          id: newId, 
+          ...ruleToSave,
+          targetValue: target.trim(),
+          status: 'enabled',
+          updatedAt: formattedDate, 
+          operator: 'admin_you'
+        };
+      });
+      setRules([...newRules, ...rules]);
+    }
+    handleCloseModal();
+  };
+
+  const handleToggleStatus = (id) => {
+    setRules(rules.map(r => 
+      r.id === id ? { ...r, status: r.status === 'enabled' ? 'disabled' : 'enabled' } : r
+    ));
+  };
+
+  const handleOpenConfirm = (id) => {
+    setRuleToDelete(id);
+    setIsConfirmOpen(true);
+  };
+
+  const handleCloseConfirm = () => {
+    setIsConfirmOpen(false);
+    setRuleToDelete(null);
+  };
+
+  const handleDeleteRule = () => {
+    if (ruleToDelete) {
+      setRules(rules.filter(r => r.id !== ruleToDelete));
+      handleCloseConfirm();
+    }
+  };
+  
+  const handleExport = () => {
+    const headers = ['狀態', '目標類型', '目標值', '執行動作', '原因', '更新時間', '操作人'];
+    const rows = filteredRules.map(rule => [
+        rule.status === 'enabled' ? '啟用' : '停用',
+        rule.targetType === 'member' ? '會員帳號' : 'IP 位址',
+        rule.targetValue,
+        rule.action,
+        rule.reason,
+        rule.updatedAt,
+        rule.operator
+    ]);
+
+    let csvContent = "data:text/csv;charset=utf-8," 
+        + headers.join(",") + "\n" 
+        + rows.map(e => e.join(",")).join("\n");
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    const date = new Date().toISOString().slice(0, 10);
+    link.setAttribute("download", `risk_rules_export_${date}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // --- ✨ HYDRATION 終極修復：在 isMounted 變為 true 之前，不渲染任何內容 ---
+  if (!isMounted) {
+    return null;
+  }
+
+  return (
+    <div className="bg-gray-100 min-h-screen font-sans text-gray-800">
+      <div className="container mx-auto p-4 sm:p-6 lg:p-8">
+        <Header />
+        <DashboardIntegrationInfo />
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <FilterSection 
+            filters={filters} 
+            onFilterChange={handleFilterChange} 
+            onSearch={handleSearch}
+            onReset={handleResetFilters} 
+            onAddNew={() => handleOpenModal()}
+            onExport={handleExport}
+          />
+          <RulesTable 
+            rules={filteredRules}
+            onEdit={handleOpenModal}
+            onDelete={handleOpenConfirm}
+            onToggleStatus={handleToggleStatus}
+          />
+        </div>
+      </div>
+      {isModalOpen && (
+        <RuleModal 
+          rule={editingRule} 
+          onClose={handleCloseModal} 
+          onSave={handleSaveRule} 
+        />
+      )}
+      {isConfirmOpen && (
+        <ConfirmationModal
+          onClose={handleCloseConfirm}
+          onConfirm={handleDeleteRule}
+        />
+      )}
+    </div>
+  );
+}
+
+// --- 子組件 (Sub-components) ---
+
+function Header() {
+  return (
+    <header className="mb-6">
+      <h1 className="text-3xl font-bold text-gray-900">🪐 風控規則管理</h1>
+      <p className="text-gray-600 mt-1">統一管理會員帳號與 IP 位址的限制規則。</p>
+    </header>
+  );
+}
+
+function DashboardIntegrationInfo() {
+    return (
+        <div className="mb-6 bg-blue-50 border-l-4 border-blue-400 p-4 rounded-r-lg">
+            <div className="flex">
+                <div className="py-1"><Info className="h-6 w-6 text-blue-500" /></div>
+                <div className="ml-3">
+                    <h4 className="text-md font-semibold text-blue-800">如何連動至「會員儀表板」？</h4>
+                    <p className="text-sm text-blue-700 mt-1">
+                        此處建立的規則將即時同步。在會員儀表板中，您會看到：<br/>
+                        - <strong>會員帳號</strong>被命中：顯示 🔒 <span className="font-semibold">風險管制中</span> 標籤。<br/>
+                        - <strong>登入 IP</strong> 被命中：在對應 IP 旁顯示 ⚠️ 警示圖示。
+                    </p>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function FilterSection({ filters, onFilterChange, onSearch, onReset, onAddNew, onExport }) {
+  return (
+    <div className="mb-6 space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        {/* 搜尋欄位 */}
+        <div className="lg:col-span-2">
+          <label htmlFor="keyword" className="block text-sm font-medium text-gray-700 mb-1">搜尋目標值</label>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+            <input
+              type="text"
+              name="keyword"
+              id="keyword"
+              placeholder="輸入會員帳號或 IP 位址..."
+              value={filters.keyword}
+              onChange={onFilterChange}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition"
+            />
+          </div>
+        </div>
+        
+        {/* 目標類型 */}
+        <div>
+          <label htmlFor="targetType" className="block text-sm font-medium text-gray-700 mb-1">目標類型</label>
+          <select name="targetType" id="targetType" value={filters.targetType} onChange={onFilterChange} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition">
+            <option value="all">全部類型</option>
+            <option value="member">會員帳號</option>
+            <option value="ip">IP 位址</option>
+          </select>
+        </div>
+
+        {/* 執行動作 */}
+        <div>
+          <label htmlFor="action" className="block text-sm font-medium text-gray-700 mb-1">執行動作</label>
+          <select name="action" id="action" value={filters.action} onChange={onFilterChange} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition">
+            <option value="all">全部動作</option>
+            {ACTIONS_LIST.map(act => <option key={act} value={act}>{act}</option>)}
+          </select>
+        </div>
+        
+        {/* 狀態 */}
+        <div>
+          <label htmlFor="status" className="block text-sm font-medium text-gray-700 mb-1">狀態</label>
+          <select name="status" id="status" value={filters.status} onChange={onFilterChange} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition">
+            <option value="all">全部狀態</option>
+            <option value="enabled">啟用</option>
+            <option value="disabled">停用</option>
+          </select>
+        </div>
+      </div>
+      
+      {/* 操作按鈕 */}
+      <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-gray-200">
+         <div className="flex items-center gap-2">
+            <button onClick={onSearch} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">
+                <Search size={16} />
+                搜尋
+            </button>
+            <button onClick={onReset} className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors">
+                <RotateCcw size={16} />
+                重設
+            </button>
+         </div>
+         <div className="flex items-center gap-2">
+            <button onClick={onExport} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-sm">
+                <Download size={16} />
+                匯出
+            </button>
+            <button onClick={onAddNew} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm">
+                <Plus size={16} />
+                新增規則
+            </button>
+         </div>
+      </div>
+    </div>
+  );
+}
+
+function RulesTable({ rules, onEdit, onDelete, onToggleStatus }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-gray-200">
+        <thead className="bg-gray-50">
+          <tr>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">狀態</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">目標類型</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">目標值</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">執行動作</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">原因</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">更新時間 / 操作人</th>
+            <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+          </tr>
+        </thead>
+        <tbody className="bg-white divide-y divide-gray-200">
+          {rules.length > 0 ? rules.map(rule => (
+            <tr key={rule.id} className="hover:bg-gray-50 transition-colors">
+              <td className="px-6 py-4 whitespace-nowrap">
+                <StatusToggle status={rule.status} onToggle={() => onToggleStatus(rule.id)} />
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap">
+                <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${rule.targetType === 'member' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'}`}>
+                  {rule.targetType === 'member' ? '會員帳號' : 'IP 位址'}
+                </span>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap font-mono text-sm text-gray-900">{rule.targetValue}</td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-semibold">{rule.action}</td>
+              <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" title={rule.reason}>{rule.reason}</td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <div>{rule.updatedAt}</div>
+                <div className="text-xs text-gray-400">{rule.operator}</div>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                <div className="flex items-center justify-center gap-4">
+                  <button onClick={() => onEdit(rule)} className="text-indigo-600 hover:text-indigo-900" title="編輯">
+                    <Edit size={18} />
+                  </button>
+                  <button onClick={() => onDelete(rule.id)} className="text-red-600 hover:text-red-900" title="刪除">
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </td>
+            </tr>
+          )) : (
+            <tr>
+              <td colSpan="7" className="text-center py-16 text-gray-500">
+                <p className="font-semibold">找不到符合條件的規則</p>
+                <p className="text-sm mt-1">請嘗試調整篩選條件或重設。</p>
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function StatusToggle({ status, onToggle }) {
+  const isEnabled = status === 'enabled';
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={onToggle}
+        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${isEnabled ? 'bg-green-600' : 'bg-gray-300'}`}
+      >
+        <span
+          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${isEnabled ? 'translate-x-5' : 'translate-x-0'}`}
+        />
+      </button>
+      <span className={`text-sm font-medium ${isEnabled ? 'text-green-700' : 'text-gray-600'}`}>
+        {isEnabled ? '啟用' : '停用'}
+      </span>
+    </div>
+  );
+}
+
+function RuleModal({ rule, onClose, onSave }) {
+  const [formData, setFormData] = useState({
+    targetType: rule?.targetType || 'member',
+    targetValue: rule?.targetValue || '',
+    action: rule?.action || '',
+    reason: rule?.reason || '',
+    isPermanent: true,
+    expiryDate: '',
+  });
+
+  const handleInputChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value
+    }));
+  };
+
+  const handleActionChange = (e) => {
+    const newAction = e.target.value;
+    setFormData(prev => ({
+      ...prev,
+      action: newAction,
+      reason: '' // 清空原因以便選擇預設值
+    }));
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!formData.action || !formData.reason || !formData.targetValue) {
+      // 改用更友善的提示方式，而非瀏覽器原生的 alert
+      // 在此原型中我們暫時保留 alert，但在正式產品中應替換為 UI 元件
+      alert('目標值、執行動作與原因為必填欄位。');
+      return;
+    }
+    onSave(formData);
+  };
+
+  const currentPresetReasons = PRESET_REASONS[formData.action] || [];
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg transform transition-all">
+        <form onSubmit={handleSubmit}>
+          <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+            <h3 className="text-xl font-semibold text-gray-900">{rule ? '編輯規則' : '新增規則'}</h3>
+            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
+          </div>
+          <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">目標類型</label>
+              <div className="flex">
+                <button type="button" onClick={() => setFormData({...formData, targetType: 'member'})} className={`px-4 py-2 rounded-l-lg border ${formData.targetType === 'member' ? 'bg-indigo-600 text-white border-indigo-600 z-10' : 'bg-white hover:bg-gray-50'}`}>會員帳號</button>
+                <button type="button" onClick={() => setFormData({...formData, targetType: 'ip'})} className={`px-4 py-2 -ml-px rounded-r-lg border ${formData.targetType === 'ip' ? 'bg-indigo-600 text-white border-indigo-600 z-10' : 'bg-white hover:bg-gray-50'}`}>IP 位址</button>
+              </div>
+            </div>
+            <div>
+              <label htmlFor="targetValue" className="block text-sm font-medium text-gray-700">目標值 <span className="text-red-500">*</span></label>
+              <textarea
+                name="targetValue"
+                id="targetValue"
+                rows="3"
+                value={formData.targetValue}
+                onChange={handleInputChange}
+                className="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                placeholder={rule ? "編輯模式下一次僅能修改一個目標" : "可輸入單一或多個目標，每行一個。"}
+                required
+                disabled={!!rule}
+              />
+            </div>
+            <div>
+              <label htmlFor="action" className="block text-sm font-medium text-gray-700">執行動作 <span className="text-red-500">*</span></label>
+              <select
+                name="action"
+                id="action"
+                value={formData.action}
+                onChange={handleActionChange}
+                className="mt-1 block w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                required
+              >
+                <option value="" disabled>請選擇一個動作...</option>
+                {ACTIONS_LIST.map(act => <option key={act} value={act}>{act}</option>)}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="reason" className="block text-sm font-medium text-gray-700">原因 <span className="text-red-500">*</span></label>
+              <input
+                type="text"
+                name="reason"
+                id="reason"
+                list="preset-reasons"
+                value={formData.reason}
+                onChange={handleInputChange}
+                className="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                placeholder="可選擇預設或自行輸入原因"
+                required
+              />
+              <datalist id="preset-reasons">
+                {currentPresetReasons.map(r => <option key={r} value={r} />)}
+              </datalist>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">有效期限</label>
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center">
+                  <input
+                    id="isPermanent"
+                    name="isPermanent"
+                    type="checkbox"
+                    checked={formData.isPermanent}
+                    onChange={handleInputChange}
+                    className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                  />
+                  <label htmlFor="isPermanent" className="ml-2 block text-sm text-gray-900">
+                    永久有效
+                  </label>
+                </div>
+                {!formData.isPermanent && (
+                  <input
+                    type="date"
+                    name="expiryDate"
+                    id="expiryDate"
+                    value={formData.expiryDate}
+                    onChange={handleInputChange}
+                    className="block w-full border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="p-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3">
+            <button type="button" onClick={onClose} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50">取消</button>
+            <button type="submit" className="px-4 py-2 bg-indigo-600 border border-transparent rounded-lg text-sm font-medium text-white hover:bg-indigo-700 shadow-sm">儲存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmationModal({ onClose, onConfirm }) {
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex justify-center items-center p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm transform transition-all p-6 text-center">
+        <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100">
+          <AlertTriangle className="h-6 w-6 text-red-600" aria-hidden="true" />
+        </div>
+        <h3 className="text-lg font-medium text-gray-900 mt-4">確認刪除</h3>
+        <p className="text-sm text-gray-500 mt-2">
+          您確定要刪除這條規則嗎？此操作無法復原。
+        </p>
+        <div className="mt-6 flex justify-center gap-4">
+          <button
+            type="button"
+            className="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50"
+            onClick={onClose}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700"
+            onClick={onConfirm}
+          >
+            確認刪除
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
